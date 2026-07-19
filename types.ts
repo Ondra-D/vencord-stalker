@@ -46,7 +46,9 @@ export interface PresenceLogEntry {
     channelId?: string;
     messageContent?: string;
     messageId?: string;
-    channelName?: string;
+    deviceTimings?: Array<{ device: string; status: string; start: number; end?: number | null }>;
+    deviceChange?: boolean;
+    activityChange?: boolean;
 }
 
 

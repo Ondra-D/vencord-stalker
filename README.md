@@ -21,7 +21,7 @@ https://youtu.be/XmVNRKrphlw?si=XFwjkwU_1bMOjOUc
 
 ## Usage
 
-- Right-click a user → **Stalk User**
+- Right-click a user → **Track User**
 - Open the plugin settings to configure what gets logged/notified
 
 ## Screenshots

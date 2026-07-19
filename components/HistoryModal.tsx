@@ -17,14 +17,65 @@ import { renderProfileChangeBadges } from "./ProfileCard";
 import { openSnapshotsModal } from "./SnapshotsModal";
 import { openUserStalkerSettings } from "./UserSettings";
 
-const Native = isDesktop ? VencordNative.pluginHelpers.Stalker as PluginNative<typeof import("../native")> : null;
+const Native = isDesktop ? VencordNative.pluginHelpers.ActivityTracker as PluginNative<typeof import("../native")> : null;
 
 const cl = classNameFactory("stalker-modal-");
 
 function renderDeviceBadges(entry: PresenceLogEntry) {
     const clientStatus = (entry as any).clientStatus as Record<string, string> | undefined;
-    if (!clientStatus) return null;
-    return <DeviceBadges clientStatus={clientStatus} />;
+    const deviceTimings = (entry as any).deviceTimings as Array<{ device: string; status: string; start: number; end?: number | null }> | undefined;
+    if (!clientStatus && !deviceTimings) return null;
+    return <DeviceBadges clientStatus={clientStatus} deviceTimings={deviceTimings} entryTimestamp={entry.timestamp} />;
+}
+
+function renderPresenceStatuses(entry: PresenceLogEntry) {
+    const deviceTimings = (entry as any).deviceTimings as Array<{ device: string; status: string; start: number; end?: number | null }> | undefined;
+
+    if (Array.isArray(deviceTimings) && deviceTimings.length > 0) {
+        const devices = ["desktop", "mobile", "web"];
+        const transitions: React.ReactNode[] = [];
+
+        for (const device of devices) {
+            const endedSegment = deviceTimings.find(t => t.device === device && t.end === entry.timestamp);
+            const startedSegment = deviceTimings.find(t => t.device === device && t.start === entry.timestamp);
+
+            if (endedSegment || startedSegment) {
+                const prevStatus = endedSegment ? endedSegment.status : "offline";
+                const currStatus = startedSegment ? startedSegment.status : "offline";
+
+                if (prevStatus !== currStatus) {
+                    transitions.push(
+                        <div key={device} style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                            <span style={{ fontSize: "12px", opacity: 0.7, textTransform: "capitalize", fontWeight: 600, color: "white" }}>{device}:</span>
+                            <span className={getStatusClass(prevStatus)}>{getStatusLabel(prevStatus)}</span>
+                            <span className="stalker-log-entry__arrow">→</span>
+                            <span className={getStatusClass(currStatus)}>{getStatusLabel(currStatus)}</span>
+                        </div>
+                    );
+                }
+            }
+        }
+
+        if (transitions.length > 0) {
+            return (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "center" }}>
+                    {transitions}
+                </div>
+            );
+        }
+    }
+
+    return (
+        <div className="stalker-log-entry__statuses">
+            {entry.previousStatus && (
+                <>
+                    <span className={getStatusClass(entry.previousStatus)}>{getStatusLabel(entry.previousStatus)}</span>
+                    <span className="stalker-log-entry__arrow">→</span>
+                </>
+            )}
+            <span className={getStatusClass(entry.currentStatus)}>{getStatusLabel(entry.currentStatus)}</span>
+        </div>
+    );
 }
 
 function ConfirmDeleteModal({ modalProps, onConfirm }: { modalProps: ModalProps; onConfirm: () => void; }) {
@@ -110,6 +161,7 @@ export function PresenceHistoryPanel({ modalProps, initialUserId }: { modalProps
     }, [logs]);
     const [selectedSection, setSelectedSection] = useState<number>(0);
     const [dayOffset, setDayOffset] = useState(0);
+    const [platformFilter, setPlatformFilter] = useState<"all" | "desktop" | "mobile" | "web">("all");
 
     const dayRange = useMemo(() => {
         const start = new Date();
@@ -135,17 +187,32 @@ export function PresenceHistoryPanel({ modalProps, initialUserId }: { modalProps
 
     const forUser = (entry: PresenceLogEntry) => !filterUserId || entry.userId === filterUserId;
 
-    const presenceItems = logsForDay.filter(e => forUser(e) && (e as any).type !== "profile" && (e as any).type !== "message" && (e as any).type !== "typing" && (e.previousStatus !== undefined || e.currentStatus !== undefined));
-    const richActivityItems = presenceItems.filter(e => Array.isArray((e as any).activities) && (e as any).activities.length > 0);
-    const basePresenceItems = presenceItems.filter(e => !richActivityItems.includes(e));
+    const presenceItems = logsForDay.filter(e => forUser(e) && (e as any).type !== "profile" && (e as any).type !== "message" && (e as any).type !== "typing" && (e.previousStatus !== undefined || e.currentStatus !== undefined || (e as any).deviceChange));
+    const basePresenceItems = presenceItems.filter(e => (e.previousStatus !== undefined && e.previousStatus !== e.currentStatus) || (e as any).deviceChange);
+    const richActivityItems = presenceItems.filter(e => {
+        const hasActivities = Array.isArray((e as any).activities) && (e as any).activities.length > 0;
+        if (!hasActivities) return false;
+        return (e as any).activityChange === undefined || (e as any).activityChange === true;
+    });
     const profileItems = logsForDay.filter(e => forUser(e) && ((e as any).type === "profile"));
     const messageItems = logsForDay.filter(e => forUser(e) && (((e as any).type === "message") || (e.guildId && e.guildId !== "@me")));
+
+    const filteredPresenceItems = useMemo(() => {
+        if (platformFilter === "all") return basePresenceItems;
+        return basePresenceItems.filter(e => {
+            const deviceTimings = (e as any).deviceTimings;
+            if (Array.isArray(deviceTimings) && deviceTimings.length > 0) {
+                return deviceTimings.some((t: any) => t.device === platformFilter && (t.start === e.timestamp || t.end === e.timestamp));
+            }
+            return e.clientStatus && e.clientStatus[platformFilter] && e.clientStatus[platformFilter] !== "offline";
+        });
+    }, [basePresenceItems, platformFilter]);
 
     const sectionCounts = [basePresenceItems.length, profileItems.length, messageItems.length, richActivityItems.length];
 
     const subtitle = filterUserId
         ? `${basePresenceItems.length + profileItems.length + messageItems.length + richActivityItems.length} changes for ${UserStore.getUser(filterUserId)?.username ?? filterUserId}`
-        : `${basePresenceItems.length + profileItems.length + messageItems.length + richActivityItems.length} tracked changes`;
+        : `${basePresenceItems.length + profileItems.length + messageItems.length + richActivityItems.length} stalked changes`;
 
     const openLogs = async () => {
         if (!Native) return;
@@ -158,6 +225,17 @@ export function PresenceHistoryPanel({ modalProps, initialUserId }: { modalProps
         } catch (e) {
             logger.error("Failed to open logs folder", e);
         }
+    };
+
+    const exportLogs = () => {
+        if (!logs.length) return;
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(logs, null, 2));
+        const downloadAnchor = document.createElement("a");
+        downloadAnchor.setAttribute("href", dataStr);
+        downloadAnchor.setAttribute("download", `${filterUserId ?? "all"}_activity_logs.json`);
+        document.body.appendChild(downloadAnchor);
+        downloadAnchor.click();
+        downloadAnchor.remove();
     };
 
     const deleteAllLogs = async () => {
@@ -203,7 +281,7 @@ export function PresenceHistoryPanel({ modalProps, initialUserId }: { modalProps
     return (
         <ModalRoot {...modalProps} size={ModalSize.LARGE} className={cl("root") + " stalker-modal-root"}>
             <ModalHeader className={cl("head")}>
-                <Text variant="heading-lg/semibold" style={{ flexGrow: 1 }}>Stalker Presence History</Text>
+                <Text variant="heading-lg/semibold" style={{ flexGrow: 1 }}>Discord Activity Tracker History</Text>
                 {filterUserId && (
                     <Tooltip text="User Settings">
                         {tooltipProps => (
@@ -240,6 +318,7 @@ export function PresenceHistoryPanel({ modalProps, initialUserId }: { modalProps
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>
                         {isDesktop && <Button onClick={openLogs}>Open Logs</Button>}
+                        {logs.length > 0 && <Button onClick={exportLogs} variant="secondary">Export All Logs</Button>}
                         {filterUserId && <Button onClick={confirmDeleteLogs} variant="dangerPrimary">Delete All Logs</Button>}
                         {!filterUserId && <Button onClick={confirmClearSnapshots} variant="dangerPrimary">Clear All Snapshots</Button>}
                         {showDebugTools && (
@@ -265,42 +344,47 @@ export function PresenceHistoryPanel({ modalProps, initialUserId }: { modalProps
 
                 <div style={{ marginTop: 16 }}>
                     {selectedSection === 0 && (
-                        basePresenceItems.length ? (
-                            <ScrollerThin className="stalker-log-list">
-                                {basePresenceItems.map(entry => (
-                                    <div key={`${entry.userId}-${entry.timestamp}`} className="stalker-log-entry">
-                                        <div className="stalker-log-entry__header">
-                                            <div className="stalker-log-entry__identity">
-                                                {(() => {
-                                                    const user = UserStore.getUser(entry.userId);
-                                                    const avatarUrl = user?.avatar ? `https://cdn.discordapp.com/avatars/${entry.userId}/${user.avatar}.png?size=64` : null;
-                                                    return avatarUrl ? <img src={avatarUrl} alt="" className="stalker-log-entry__avatar" /> : <div className="stalker-log-entry__avatar stalker-log-entry__avatar--fallback">{entry.username?.charAt(0)?.toUpperCase() ?? "?"}</div>;
-                                                })()}
-                                                <Text variant="text-md/semibold" className="stalker-log-entry__header-name">{entry.username}</Text>
-                                            </div>
-                                            <div className="stalker-log-entry__statuses">
-                                                {entry.previousStatus && (
-                                                    <>
-                                                        <span className={getStatusClass(entry.previousStatus)}>{getStatusLabel(entry.previousStatus)}</span>
-                                                        <span className="stalker-log-entry__arrow">→</span>
-                                                    </>
-                                                )}
-                                                <span className={getStatusClass(entry.currentStatus)}>{getStatusLabel(entry.currentStatus)}</span>
-                                            </div>
-                                        </div>
-                                        <div className="stalker-log-entry__meta">
-                                            <span>{formatTimestamp(entry.timestamp)}</span>
-                                            {entry.offlineDuration && <span>Offline {getDurationLabel(entry.offlineDuration)}</span>}
-                                            {entry.onlineDuration && <span>Online {getDurationLabel(entry.onlineDuration)}</span>}
-                                            {renderPresenceActivitySummary(entry, userLogsMap.get(entry.userId) || [])}
-                                            {renderDeviceBadges(entry)}
-                                        </div>
-                                    </div>
+                        <>
+                            <div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
+                                {["all", "desktop", "mobile", "web"].map(p => (
+                                    <Button
+                                        key={p}
+                                        size="small"
+                                        variant={platformFilter === p ? "primary" : "secondary"}
+                                        onClick={() => setPlatformFilter(p as any)}
+                                    >
+                                        {p.charAt(0).toUpperCase() + p.slice(1)}
+                                    </Button>
                                 ))}
-                            </ScrollerThin>
-                        ) : (
-                            <Forms.FormText>No presence updates recorded yet.</Forms.FormText>
-                        )
+                            </div>
+                            {filteredPresenceItems.length ? (
+                                <ScrollerThin className="stalker-log-list">
+                                    {filteredPresenceItems.map(entry => (
+                                        <div key={`${entry.userId}-${entry.timestamp}`} className="stalker-log-entry">
+                                            <div className="stalker-log-entry__header">
+                                                <div className="stalker-log-entry__identity">
+                                                    {(() => {
+                                                        const user = UserStore.getUser(entry.userId);
+                                                        const avatarUrl = user?.avatar ? `https://cdn.discordapp.com/avatars/${entry.userId}/${user.avatar}.png?size=64` : null;
+                                                        return avatarUrl ? <img src={avatarUrl} alt="" className="stalker-log-entry__avatar" /> : <div className="stalker-log-entry__avatar stalker-log-entry__avatar--fallback">{entry.username?.charAt(0)?.toUpperCase() ?? "?"}</div>;
+                                                    })()}
+                                                    <Text variant="text-md/semibold" className="stalker-log-entry__header-name">{entry.username}</Text>
+                                                </div>
+                                                {renderPresenceStatuses(entry)}
+                                            </div>
+                                            <div className="stalker-log-entry__meta">
+                                                <span>{formatTimestamp(entry.timestamp)}</span>
+                                                {entry.offlineDuration && <span>Offline {getDurationLabel(entry.offlineDuration)}</span>}
+                                                {entry.onlineDuration && <span>Online {getDurationLabel(entry.onlineDuration)}</span>}
+                                                {renderDeviceBadges(entry)}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </ScrollerThin>
+                            ) : (
+                                <Forms.FormText>No presence updates recorded yet.</Forms.FormText>
+                            )}
+                        </>
                     )}
 
                     {selectedSection === 1 && (
@@ -407,15 +491,7 @@ export function PresenceHistoryPanel({ modalProps, initialUserId }: { modalProps
                                                 })()}
                                                 <Text variant="text-md/semibold" className="stalker-log-entry__header-name">{entry.username}</Text>
                                             </div>
-                                            <div className="stalker-log-entry__statuses">
-                                                {entry.previousStatus && (
-                                                    <>
-                                                        <span className={getStatusClass(entry.previousStatus)}>{getStatusLabel(entry.previousStatus)}</span>
-                                                        <span className="stalker-log-entry__arrow">→</span>
-                                                    </>
-                                                )}
-                                                <span className={getStatusClass(entry.currentStatus)}>{getStatusLabel(entry.currentStatus)}</span>
-                                            </div>
+                                                {renderPresenceStatuses(entry)}
                                         </div>
                                         <div className="stalker-log-entry__meta">
                                             <span>{formatTimestamp(entry.timestamp)}</span>

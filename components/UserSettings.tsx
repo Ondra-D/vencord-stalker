@@ -188,7 +188,7 @@ export function UserStalkerSettingsModal({ modalProps, userId, userStore }: { mo
         <ModalRoot {...modalProps} size={ModalSize.MEDIUM} className={cl("root") + " stalker-modal-root"}>
             <ModalHeader className={cl("head")}>
                 <Text variant="heading-lg/semibold">
-                    Stalker Settings for {user?.username ?? "User"}
+                    Activity Tracker Settings for {user?.username ?? "User"}
                 </Text>
                 <ModalCloseButton onClick={modalProps.onClose} />
             </ModalHeader>

@@ -3,7 +3,7 @@
 
 import { DATA_DIR } from "@main/utils/constants";
 import { IpcMainInvokeEvent, shell } from "electron";
-import { mkdir, readFile, unlink, writeFile } from "fs/promises";
+import { mkdir, readFile, stat, unlink, writeFile } from "fs/promises";
 import path from "path";
 
 import { PresenceLogEntry } from "../types";
@@ -12,7 +12,18 @@ let logsDir: string;
 
 const getLogsDir = async () => {
     if (!logsDir) {
-        logsDir = path.join(DATA_DIR, "StalkerLogs");
+        const oldPath = path.join(DATA_DIR, "StalkerLogs");
+        const newPath = path.join(DATA_DIR, "ActivityTrackerLogs");
+
+        let useOld = false;
+        try {
+            const info = await stat(oldPath);
+            if (info.isDirectory()) {
+                useOld = true;
+            }
+        } catch {}
+
+        logsDir = useOld ? oldPath : newPath;
         await mkdir(logsDir, { recursive: true });
     }
     return logsDir;

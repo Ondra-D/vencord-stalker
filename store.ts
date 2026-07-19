@@ -9,8 +9,8 @@ import { getRetentionCutoffMs, getWhitelistedIds } from "./settings";
 import { PresenceLogEntry, ProfileSnapshot, UserStalkerConfig } from "./types";
 import { formatTimestamp, getDurationLabel, logger } from "./utils";
 
-export const isDesktop = typeof VencordNative !== "undefined" && !!VencordNative.pluginHelpers?.Stalker;
-export const Native = isDesktop ? VencordNative.pluginHelpers.Stalker as PluginNative<typeof import("./native")> : null;
+export const isDesktop = typeof VencordNative !== "undefined" && !!VencordNative.pluginHelpers?.ActivityTracker;
+export const Native = isDesktop ? VencordNative.pluginHelpers.ActivityTracker as PluginNative<typeof import("./native")> : null;
 
 export async function readUserLogs(userId: string, cutoffMs?: number): Promise<PresenceLogEntry[]> {
     if (Native) {
@@ -71,6 +71,76 @@ export const lastKnownUsers = new Map<string, ProfileSnapshot>();
 export const userConfigs = new Map<string, UserStalkerConfig>();
 export const lastKnownStatuses = new Map<string, string | null>();
 export const lastKnownActivities = new Map<string, any[]>();
+export const activeDeviceTimings = new Map<string, Array<{ device: string; status: string; start: number; end?: number | null }>>();
+export const lastKnownClientStatuses = new Map<string, Record<string, string>>();
+
+export function updateDeviceTimings(userId: string, currentStatus: string | null, clientStatusMap: Record<string, string>, timestamp: number) {
+    const isUserOffline = !currentStatus || ["offline", "invisible"].includes(currentStatus.toLowerCase());
+    
+    let segments = activeDeviceTimings.get(userId);
+    if (!segments) {
+        segments = [];
+    }
+
+    const devices = ["desktop", "mobile", "web"];
+    let changed = false;
+
+    if (isUserOffline) {
+        for (const segment of segments) {
+            if (!segment.end) {
+                segment.end = timestamp;
+                changed = true;
+            }
+        }
+    } else {
+        for (const device of devices) {
+            const currentDevStatus = clientStatusMap[device] || "offline";
+            const lastSegmentIdx = segments.map(s => s.device).lastIndexOf(device);
+            const lastSegment = lastSegmentIdx !== -1 ? segments[lastSegmentIdx] : null;
+
+            if (lastSegment && !lastSegment.end) {
+                if (currentDevStatus === "offline") {
+                    lastSegment.end = timestamp;
+                    changed = true;
+                } else if (lastSegment.status !== currentDevStatus) {
+                    lastSegment.end = timestamp;
+                    segments.push({
+                        device,
+                        status: currentDevStatus,
+                        start: timestamp,
+                        end: null
+                    });
+                    changed = true;
+                }
+            } else {
+                if (currentDevStatus !== "offline") {
+                    segments.push({
+                        device,
+                        status: currentDevStatus,
+                        start: timestamp,
+                        end: null
+                    });
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    if (segments.length > 0) {
+        activeDeviceTimings.set(userId, segments);
+    } else {
+        activeDeviceTimings.delete(userId);
+    }
+
+    const result = JSON.parse(JSON.stringify(segments));
+
+    if (isUserOffline) {
+        activeDeviceTimings.delete(userId);
+    }
+
+    return { result, changed };
+}
+
 export const typingCooldowns = new Map<string, number>();
 export const pendingOnlineLogs = new Map<string, { timeout: ReturnType<typeof setTimeout>; entry: any; }>();
 export const pendingActivityLogs = new Map<string, { timeout: ReturnType<typeof setTimeout>; entry: any; }>();

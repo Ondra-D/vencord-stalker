@@ -1,11 +1,83 @@
 
 
 
-import { Tooltip } from "@webpack/common";
+import { Tooltip, UserStore, useState } from "@webpack/common";
 
 import { getProfileChangeLabel } from "../store";
 import { PresenceLogEntry, ProfileChanges, ProfileSnapshot } from "../types";
 import { getAvatarDecorationUrl } from "../utils";
+
+function SafeAvatar({ userId, avatarUrl, username, getExt }: { userId: string; avatarUrl: string | null; username: string; getExt: (hash: string) => string }) {
+    const [failed, setFailed] = useState(false);
+
+    if (!avatarUrl || failed) {
+        const currentUser = UserStore.getUser(userId);
+        const currentAvatar = currentUser?.avatar;
+        const fallbackUrl = currentAvatar ? `https://cdn.discordapp.com/avatars/${userId}/${currentAvatar}.${getExt(currentAvatar)}?size=80` : null;
+
+        if (fallbackUrl && !failed) {
+            return (
+                <img 
+                    src={fallbackUrl} 
+                    alt="Avatar" 
+                    className="stalker-profile-card__avatar" 
+                    onError={() => setFailed(true)} 
+                />
+            );
+        }
+
+        return (
+            <div className="stalker-profile-card__avatar stalker-profile-card__avatar--default">
+                {username?.charAt(0)?.toUpperCase() ?? "?"}
+            </div>
+        );
+    }
+
+    return (
+        <img 
+            src={avatarUrl} 
+            alt="Avatar" 
+            className="stalker-profile-card__avatar" 
+            onError={() => setFailed(true)} 
+        />
+    );
+}
+
+function SafeBanner({ userId, bannerUrl, bannerColor, getExt }: { userId: string; bannerUrl: string | null; bannerColor: string | null; getExt: (hash: string) => string }) {
+    const [failed, setFailed] = useState(false);
+
+    if (!bannerUrl || failed) {
+        const currentUser = UserStore.getUser(userId);
+        const currentBanner = currentUser?.banner;
+        const fallbackUrl = currentBanner ? `https://cdn.discordapp.com/banners/${userId}/${currentBanner}.${getExt(currentBanner)}?size=600` : null;
+
+        if (fallbackUrl && !failed) {
+            return (
+                <img 
+                    src={fallbackUrl} 
+                    alt="Banner" 
+                    className="stalker-profile-card__banner-img" 
+                    onError={() => setFailed(true)} 
+                />
+            );
+        }
+
+        return bannerColor ? (
+            <div className="stalker-profile-card__banner-color" style={{ backgroundColor: bannerColor }} />
+        ) : (
+            <div className="stalker-profile-card__banner-default" />
+        );
+    }
+
+    return (
+        <img 
+            src={bannerUrl} 
+            alt="Banner" 
+            className="stalker-profile-card__banner-img" 
+            onError={() => setFailed(true)} 
+        />
+    );
+}
 
 export function ProfileCard({ snapshot, userId, label, changedFields, referenceSnapshot }: { snapshot: ProfileSnapshot; userId: string; label: string; changedFields?: string[]; referenceSnapshot?: ProfileSnapshot; }) {
     const getExt = (hash: string) => hash.startsWith("a_") ? "gif" : "png";
@@ -27,22 +99,20 @@ export function ProfileCard({ snapshot, userId, label, changedFields, referenceS
             <div className="stalker-profile-card__label">{label}</div>
 
             <div className="stalker-profile-card__banner-section" style={{ position: "relative", ...(isChanged("banner") || isChanged("banner_color") ? { outline: "2px solid #5865f2" } : {}) }}>
-                {bannerUrl ? (
-                    <img src={bannerUrl} alt="Banner" className="stalker-profile-card__banner-img" />
-                ) : bannerColor ? (
-                    <div className="stalker-profile-card__banner-color" style={{ backgroundColor: bannerColor }} />
-                ) : (
-                    <div className="stalker-profile-card__banner-default" />
-                )}
+                <SafeBanner
+                    userId={userId}
+                    bannerUrl={bannerUrl}
+                    bannerColor={bannerColor}
+                    getExt={getExt}
+                />
 
                 <div className="stalker-profile-card__avatar-container" style={isChanged("avatar") || isChanged("avatarDecoration") ? { outline: "2px solid #5865f2", borderRadius: "50%" } : {}}>
-                    {avatarUrl ? (
-                        <img src={avatarUrl} alt="Avatar" className="stalker-profile-card__avatar" />
-                    ) : (
-                        <div className="stalker-profile-card__avatar stalker-profile-card__avatar--default">
-                            {snapshot.username?.charAt(0)?.toUpperCase() ?? "?"}
-                        </div>
-                    )}
+                    <SafeAvatar
+                        userId={userId}
+                        avatarUrl={avatarUrl}
+                        username={snapshot.username}
+                        getExt={getExt}
+                    />
                     {avatarDecorationUrl && (
                         <img
                             src={avatarDecorationUrl}

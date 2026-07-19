@@ -39,7 +39,10 @@ import {
     presenceLogs,
     pendingActivityLogs,
     recentCurrentUserMessages,
-    typingCooldowns
+    typingCooldowns,
+    activeDeviceTimings,
+    lastKnownClientStatuses,
+    updateDeviceTimings
 } from "./store";
 import { ProfileChanges, ProfileSnapshot } from "./types";
 import {
@@ -74,7 +77,7 @@ function OpenStalkerButton() {
         <HeaderBarIcon
             className="stalker-toolbox-btn"
             onClick={() => openPresenceHistoryModal()}
-            tooltip={"Stalker"}
+            tooltip={"Activity Tracker"}
             icon={StalkerIcon}
         />
     );
@@ -92,7 +95,7 @@ async function stalkUser(id: string) {
     try {
         const u = UserStore.getUser(id);
         if (u) {
-            logger.info(`Stalking user ${u.username}, fetching profile...`);
+            logger.info(`Tracking user ${u.username}, fetching profile...`);
             const userProfile = await fetchUserProfile(id);
             await new Promise(resolve => setTimeout(resolve, 800));
 
@@ -133,10 +136,9 @@ function unStalkUser(id: string) {
 const Section = findComponentByCodeLazy("headingVariant:", ".section", ".header");
 
 export default definePlugin({
-    name: "Stalker",
-    description: "Advanced user tracking plugin that logs presence changes, profile updates, and activities. Track when users go online/offline, monitor profile changes, view activity history, and receive customizable notifications for each tracked user.",
+    name: "Activity Tracker",
+    description: "Advanced user presence and activity monitoring plugin that logs presence changes, profile updates, and status updates. Track when users change their status, monitor profile edits, view historical activity trends, and receive customizable notifications for selected users.",
     authors: [{ id: 534759293065625620n, name: "Ondra_D" }],
-    dependencies: [],
     settings,
     patches: [
         {
@@ -652,6 +654,7 @@ export default definePlugin({
                         const currentActivities = PresenceStore.getActivities(userId) || [];
                         lastKnownStatuses.set(userId, currentStatus);
                         lastKnownActivities.set(userId, currentActivities);
+                        lastKnownClientStatuses.set(userId, getClientStatusSnapshot(userId));
 
                         const isOnline = (status: string | null) => status && !["offline", "invisible"].includes(status?.toLowerCase() ?? "");
                         if (isOnline(currentStatus)) {
@@ -680,12 +683,14 @@ export default definePlugin({
                     const filteredPreviousActivities = previousActivities.filter(a => a?.type !== 4);
 
                     const activitySnapshot = getActivitySnapshots(filteredCurrentActivities);
+                    const previousActivitySnapshot = getActivitySnapshots(filteredPreviousActivities);
                     const activitySummary = formatActivitySummary(filteredCurrentActivities);
 
                     const statusChanged = previousStatus !== currentStatus && currentStatus !== undefined;
-                    const activitiesChanged = JSON.stringify(filteredPreviousActivities) !== JSON.stringify(filteredCurrentActivities);
-
-                    if (UserStore.getCurrentUser().id === userId && currentStatus === "online") continue;
+                    const activitiesChanged = JSON.stringify(previousActivitySnapshot) !== JSON.stringify(activitySnapshot);
+                    const currentClientStatus = getClientStatusSnapshot(userId);
+                    const previousClientStatus = lastKnownClientStatuses.get(userId) ?? {};
+                    const clientStatusChanged = JSON.stringify(currentClientStatus) !== JSON.stringify(previousClientStatus);
                     if (customStatusChanged) {
                         const user = UserStore.getUser(userId);
                         const isOnline = (status: string | null) => status && !["offline", "invisible"].includes(status?.toLowerCase() ?? "");
@@ -742,10 +747,11 @@ export default definePlugin({
                         }
                     }
 
-                    if (statusChanged || activitiesChanged) {
+                    if (statusChanged || activitiesChanged || clientStatusChanged) {
                         lastKnownStatuses.set(userId, currentStatus);
                         lastKnownActivities.set(userId, currentActivities);
-                        const clientStatusMap = getClientStatusSnapshot(userId);
+                        lastKnownClientStatuses.set(userId, currentClientStatus);
+                        const clientStatusMap = currentClientStatus;
                         const clientStatusSummary = summarizeClientStatus(clientStatusMap);
 
                         const user = UserStore.getUser(userId);
@@ -754,6 +760,8 @@ export default definePlugin({
                         let offlineDuration: number | undefined;
                         let onlineDuration: number | undefined;
                         const now = Date.now();
+
+                        const { result: deviceTimings, changed: deviceChange } = updateDeviceTimings(userId, currentStatus, clientStatusMap, now);
 
                         const isOnline = (status: string | null) => status && !["offline", "invisible"].includes(status?.toLowerCase() ?? "");
 
@@ -788,62 +796,37 @@ export default definePlugin({
                         if (userConfig.logPresenceChanges) {
                             const isOnlineTransition = statusChanged && isOnline(currentStatus) && !isOnline(previousStatus);
 
+                            const entry = {
+                                userId,
+                                username: user.username,
+                                discriminator: user.discriminator,
+                                timestamp: now,
+                                previousStatus: statusChanged ? previousStatus : undefined,
+                                currentStatus,
+                                guildId: undefined,
+                                clientStatus: clientStatusMap,
+                                activitySummary,
+                                clientStatusSummary,
+                                guildName: null,
+                                offlineDuration,
+                                onlineDuration,
+                                activities: activitySnapshot,
+                                type: "presence" as const,
+                                deviceTimings,
+                                deviceChange,
+                                activityChange: activitiesChanged
+                            };
+
                             if (isOnlineTransition) {
                                 const pending = pendingOnlineLogs.get(userId);
                                 if (pending) clearTimeout(pending.timeout);
-
-                                const entry = {
-                                    userId,
-                                    username: user.username,
-                                    discriminator: user.discriminator,
-                                    timestamp: Date.now(),
-                                    previousStatus,
-                                    currentStatus,
-                                    guildId: undefined,
-                                    clientStatus: clientStatusMap,
-                                    activitySummary,
-                                    clientStatusSummary,
-                                    guildName: null,
-                                    offlineDuration,
-                                    onlineDuration,
-                                    activities: activitySnapshot,
-                                    type: "presence" as const
-                                };
 
                                 addPresenceLog(entry);
                                 pendingOnlineLogs.delete(userId);
                             } else {
                                 if (!pendingOnlineLogs.has(userId)) {
-                                    const now = Date.now();
-                                    const entry = {
-                                        userId,
-                                        username: user.username,
-                                        discriminator: user.discriminator,
-                                        timestamp: now,
-                                        previousStatus: statusChanged ? previousStatus : undefined,
-                                        currentStatus,
-                                        guildId: undefined,
-                                        clientStatus: clientStatusMap,
-                                        activitySummary,
-                                        clientStatusSummary,
-                                        guildName: null,
-                                        offlineDuration,
-                                        onlineDuration,
-                                        activities: activitySnapshot,
-                                        type: "presence" as const
-                                    };
-
-                                    if (activitiesChanged) {
-                                        const pending = pendingActivityLogs.get(userId);
-                                        if (pending) clearTimeout(pending.timeout);
-
-                                        const timeout = setTimeout(() => {
-                                            addPresenceLog(pendingActivityLogs.get(userId)?.entry ?? entry);
-                                            pendingActivityLogs.delete(userId);
-                                            activityLogCooldowns.set(userId, Date.now());
-                                        }, 10_000);
-
-                                        pendingActivityLogs.set(userId, { timeout, entry });
+                                    if (clientStatusChanged && !statusChanged && !activitiesChanged) {
+                                        addPresenceLog(entry);
                                     } else if (statusChanged) {
                                         const pending = pendingActivityLogs.get(userId);
                                         if (pending) {
@@ -851,6 +834,17 @@ export default definePlugin({
                                             pendingActivityLogs.delete(userId);
                                         }
                                         addPresenceLog(entry);
+                                    } else if (activitiesChanged) {
+                                        const pending = pendingActivityLogs.get(userId);
+                                        if (pending) clearTimeout(pending.timeout);
+
+                                        const timeout = setTimeout(() => {
+                                            addPresenceLog(pendingActivityLogs.get(userId)?.entry ?? entry);
+                                            pendingActivityLogs.delete(userId);
+                                            activityLogCooldowns.set(userId, Date.now());
+                                        }, 1000);
+
+                                        pendingActivityLogs.set(userId, { timeout, entry });
                                     }
                                 }
                             }
@@ -892,7 +886,7 @@ const contextMenuPatch: NavContextMenuPatchCallback = (children, props) => {
             <Menu.MenuItem
                 key="stalker-item"
                 id="stalker-v1"
-                label={isWhitelisted ? "Stop Stalking User" : "Stalk User"}
+                label={isWhitelisted ? "Stop Tracking User" : "Track User"}
                 action={() => isWhitelisted ? unStalkUser(userId) : stalkUser(userId)}
             />
         ];
@@ -901,7 +895,7 @@ const contextMenuPatch: NavContextMenuPatchCallback = (children, props) => {
             menuItems.push(
                 <Menu.MenuItem
                     id="stalker-view-log"
-                    label="View Stalker History"
+                    label="View Presence History"
                     action={() => openPresenceHistoryModal(userId)}
                 />
             );

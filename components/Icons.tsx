@@ -2,6 +2,7 @@
 
 
 import { Tooltip } from "@webpack/common";
+import { formatTimestamp } from "../utils";
 
 function makeDeviceIcon(path: string, opts?: { viewBox?: string; width?: number; height?: number; }) {
     return () => (
@@ -88,11 +89,7 @@ export function BellIcon({ enabled, onClick }: { enabled: boolean; onClick: () =
     );
 }
 
-export function DeviceBadges({ clientStatus }: { clientStatus?: Record<string, string>; }) {
-    if (!clientStatus) return null;
-    const entries = Object.entries(clientStatus).filter(([, status]) => status && status !== "offline");
-    if (!entries.length) return null;
-
+export function DeviceBadges({ clientStatus, deviceTimings, entryTimestamp }: { clientStatus?: Record<string, string>; deviceTimings?: Array<{ device: string; status: string; start: number; end?: number | null }>; entryTimestamp?: number; }) {
     const statusColorFor = (status?: string | null) => {
         switch ((status ?? "offline").toLowerCase()) {
             case "online": return { backgroundColor: "#23a559", color: "#fff" };
@@ -101,6 +98,49 @@ export function DeviceBadges({ clientStatus }: { clientStatus?: Record<string, s
             default: return { backgroundColor: "#747f8d", color: "#fff" };
         }
     };
+
+    if (deviceTimings && deviceTimings.length > 0) {
+        const deviceMap = new Map<string, typeof deviceTimings[number]>();
+        for (const timing of deviceTimings) {
+            deviceMap.set(timing.device, timing);
+        }
+
+        return (
+            <div className="stalker-device-badges">
+                {Array.from(deviceMap.values()).map(timing => {
+                    const Icon = DeviceIcons[timing.device as keyof typeof DeviceIcons] ?? DeviceIcons.desktop;
+                    const isChanging = entryTimestamp !== undefined && (timing.start === entryTimestamp || timing.end === entryTimestamp);
+                    const colors = statusColorFor(timing.status);
+                    const startedStr = formatTimestamp(timing.start);
+                    const stoppedStr = timing.end ? formatTimestamp(timing.end) : "Ongoing";
+                    const tooltipText = `${timing.device.toUpperCase()} - ${timing.status.toUpperCase()}\nStarted: ${startedStr}\nStopped: ${stoppedStr}`;
+                    
+                    return (
+                        <Tooltip key={`${timing.device}-${timing.start}`} text={tooltipText}>
+                            {tooltipProps => (
+                                <span
+                                    {...tooltipProps}
+                                    className="stalker-device-badge"
+                                    style={{
+                                        ...colors,
+                                        opacity: isChanging ? 1 : 0.5,
+                                        transform: isChanging ? "scale(1.1)" : "none",
+                                        transition: "all 0.2s ease"
+                                    }}
+                                >
+                                    <Icon />
+                                </span>
+                            )}
+                        </Tooltip>
+                    );
+                })}
+            </div>
+        );
+    }
+
+    if (!clientStatus) return null;
+    const entries = Object.entries(clientStatus).filter(([, status]) => status && status !== "offline");
+    if (!entries.length) return null;
 
     return (
         <div className="stalker-device-badges">

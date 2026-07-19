@@ -28,7 +28,7 @@ export function SnapshotsModal({ modalProps, userId }: { modalProps: ModalProps;
                 <div style={{ padding: "16px 0" }}>
                     {!userId && (
                         <Forms.FormText style={{ marginBottom: "16px" }}>
-                            Currently tracking {snapshots.length} user profiles. These are the latest snapshots used for change detection.
+                            Currently stalking {snapshots.length} user profiles. These are the latest snapshots used for change detection.
                         </Forms.FormText>
                     )}
 
